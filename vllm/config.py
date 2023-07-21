@@ -94,6 +94,18 @@ class ModelConfig:
         return self.hf_config.hidden_size // self.hf_config.num_attention_heads
 
     def get_num_heads(self, parallel_config: "ParallelConfig") -> int:
+        # For GPTBigCode:
+        if getattr(self.hf_config, "multi_query", False):
+            # Multi-query attention, only one KV head.
+            return 1
+        # For Falcon:
+        if getattr(self.hf_config, "n_head_kv", None) is not None:
+            return (self.hf_config.n_head_kv //
+                    parallel_config.tensor_parallel_size)
+        # For LLaMA-2:
+        if getattr(self.hf_config, "num_key_value_heads", None) is not None:
+            return (self.hf_config.num_key_value_heads //
+                    parallel_config.tensor_parallel_size)
         total_num_attention_heads = self.hf_config.num_attention_heads
         return total_num_attention_heads // parallel_config.tensor_parallel_size
 
@@ -197,10 +209,10 @@ class SchedulerConfig:
     """
 
     def __init__(self, max_num_batched_tokens: int, max_num_seqs: int,
-                 max_seq_len: int) -> None:
+                 max_model_len: int) -> None:
         self.max_num_batched_tokens = max_num_batched_tokens
         self.max_num_seqs = max_num_seqs
-        self.max_seq_len = max_seq_len
+        self.max_model_len = max_model_len
 
 
 _STR_DTYPE_TO_TORCH_DTYPE = {
