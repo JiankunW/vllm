@@ -122,18 +122,21 @@ class LLM:
                 token_ids = None
             else:
                 token_ids = prompt_token_ids[i]
-            self._add_request(prompt, sampling_params, token_ids)
+
+            length_sampling_params = SamplingParams(temperature=0, max_tokens=32)  # greedy search
+            response_sampling_params = sampling_params  # user-defined search approach
+            self._add_request(prompt, length_sampling_params, response_sampling_params, token_ids)
         return self._run_engine(use_tqdm)
 
     def _add_request(
         self,
         prompt: Optional[str],
-        sampling_params: SamplingParams,
+        length_sampling_params: SamplingParams,
+        response_sampling_params: SamplingParams,
         prompt_token_ids: Optional[List[int]],
     ) -> None:
         request_id = str(next(self.request_counter))
-        self.llm_engine.add_request(request_id, prompt, sampling_params,
-                                    prompt_token_ids)
+        self.llm_engine.add_request_with_length_prediction(request_id, prompt, length_sampling_params, response_sampling_params, prompt_token_ids)
 
     def _run_engine(self, use_tqdm: bool) -> List[RequestOutput]:
         # Initialize tqdm.

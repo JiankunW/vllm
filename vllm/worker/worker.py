@@ -140,6 +140,9 @@ class Worker:
         input_tokens: List[int] = []
         input_positions: List[int] = []
         slot_mapping: List[int] = []
+        # flags for dividing metadata and model input tensors
+        grp_len_pred_flag: List[int] = []  # flag per group
+        tok_len_pred_flag: List[int] = []  # flag per input token (not include paddings)
 
         # Add prompt tokens.
         prompt_lens: List[int] = []
@@ -168,15 +171,18 @@ class Worker:
                 # During memory profiling, the block tables are not initialized
                 # yet. In this case, we just use a dummy slot mapping.
                 slot_mapping.extend([0] * prompt_len)
-                continue
+            else:
+                # Compute the slot mapping.
+                block_table = seq_group_metadata.block_tables[seq_id]
+                for i in range(prompt_len):
+                    block_number = block_table[i // self.block_size]
+                    block_offset = i % self.block_size
+                    slot = block_number * self.block_size + block_offset
+                    slot_mapping.append(slot)
 
-            # Compute the slot mapping.
-            block_table = seq_group_metadata.block_tables[seq_id]
-            for i in range(prompt_len):
-                block_number = block_table[i // self.block_size]
-                block_offset = i % self.block_size
-                slot = block_number * self.block_size + block_offset
-                slot_mapping.append(slot)
+            mask = 1 if seq_group_metadata.is_length_prediction_group() else 0
+            grp_len_pred_flag.append(mask)
+            tok_len_pred_flag.extend([mask] * prompt_len)
 
         # Add generation tokens.
         max_context_len = 0
@@ -190,6 +196,10 @@ class Worker:
             seq_ids = list(seq_group_metadata.seq_data.keys())
             sampling_params = seq_group_metadata.sampling_params
             seq_groups.append((seq_ids, sampling_params))
+
+            mask = 1 if seq_group_metadata.is_length_prediction_group() else 0
+            grp_len_pred_flag.append(mask)
+            tok_len_pred_flag.extend([mask] * len(seq_ids))
 
             for seq_id in seq_ids:
                 seq_data = seq_group_metadata.seq_data[seq_id]
@@ -228,6 +238,7 @@ class Worker:
             for block_table in generation_block_tables
         ]
         block_tables_tensor = torch.cuda.IntTensor(padded_block_tables)
+        tok_len_pred_flag = torch.cuda.IntTensor(tok_len_pred_flag)
 
         seq_data: Dict[int, SequenceData] = {}
         for seq_group_metadata in seq_group_metadata_list:
@@ -241,6 +252,8 @@ class Worker:
             context_lens=context_lens_tensor,
             max_context_len=max_context_len,
             block_tables=block_tables_tensor,
+            grp_len_pred_flag=grp_len_pred_flag,
+            tok_len_pred_flag=tok_len_pred_flag,
         )
         return tokens_tensor, positions_tensor, input_metadata
 

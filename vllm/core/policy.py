@@ -34,10 +34,25 @@ class FCFS(Policy):
         return now - seq_group.arrival_time
 
 
+class SJF(Policy):
+
+    def get_priority(
+        self,
+        now: float,
+        seq_group: SequenceGroup,
+    ) -> float:
+        if seq_group.length is None:
+            # grant the seq_group the highest priority if the length has yet to be predicted
+            len_priority = 0
+        else:
+            len_priority = -seq_group.length
+        return (len_priority, now-seq_group.arrival_time)
+
 class PolicyFactory:
 
     _POLICY_REGISTRY = {
         'fcfs': FCFS,
+        'sjf': SJF,
     }
 
     @classmethod

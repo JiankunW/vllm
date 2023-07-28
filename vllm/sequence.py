@@ -199,11 +199,13 @@ class SequenceGroup:
         seqs: List[Sequence],
         sampling_params: SamplingParams,
         arrival_time: float,
+        length: Optional[int] = None
     ) -> None:
         self.request_id = request_id
         self.seqs = seqs
         self.sampling_params = sampling_params
         self.arrival_time = arrival_time
+        self.length = length
 
     def get_seqs(
         self,
@@ -229,8 +231,27 @@ class SequenceGroup:
     def __repr__(self) -> str:
         return (f"SequenceGroup(request_id={self.request_id}, "
                 f"sampling_params={self.sampling_params}, "
-                f"num_seqs={len(self.seqs)})")
+                f"num_seqs={len(self.seqs)}"
+                f"predicted length={self.length})")
 
+class LengthPredictionSequenceGroup(SequenceGroup):
+    def __init__(
+        self,
+        request_id: str,
+        seqs: List[Sequence],
+        length_sampling_params: SamplingParams,
+        response_sampling_params: SamplingParams,
+        arrival_time: float
+    ) -> None:
+        super().__init__(request_id, seqs, length_sampling_params, arrival_time)
+        self.response_sampling_params = response_sampling_params
+
+    def __repr__(self) -> str:
+        return (f"LengthPredictionSequenceGroup(request_id={self.request_id}, "
+                f"sampling_params={self.sampling_params}, "
+                f"num_seqs={len(self.seqs)}, "
+                f"response_sampling_params={self.response_sampling_params}, "
+                f"predicted length={self.length})")
 
 class SequenceGroupMetadata:
     """Metadata for a sequence group. Used to create `InputMetadata`.
@@ -252,12 +273,17 @@ class SequenceGroupMetadata:
         seq_data: Dict[int, SequenceData],
         sampling_params: SamplingParams,
         block_tables: Dict[int, List[int]],
+        length: Optional[int] = None,
     ) -> None:
         self.request_id = request_id
         self.is_prompt = is_prompt
         self.seq_data = seq_data
         self.sampling_params = sampling_params
         self.block_tables = block_tables
+        self.length = length
+
+    def is_length_prediction_group(self) -> bool:
+        return self.length is None
 
 
 class SequenceOutputs:

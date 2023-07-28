@@ -8,6 +8,8 @@ from transformers import PretrainedConfig
 from vllm.config import ModelConfig
 from vllm.model_executor.models import *  # pylint: disable=wildcard-import
 from vllm.model_executor.weight_utils import initialize_dummy_weights
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
 
 # TODO(woosuk): Lazy-load the model classes.
 _MODEL_REGISTRY = {
@@ -33,12 +35,30 @@ def _get_model_architecture(config: PretrainedConfig) -> Type[nn.Module]:
 
 
 def get_model(model_config: ModelConfig) -> nn.Module:
-    model_class = _get_model_architecture(model_config.hf_config)
     torch.set_default_dtype(model_config.dtype)
+
+    if hasattr(model_config.hf_config, 'peft_config'):
+        model_class = LlamoraForCausalLM
+        model = model_class(model_config.hf_config)
+
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            model_config.model, device_map="auto"
+        )
+        hf_lora_model = PeftModel.from_pretrained(
+            hf_model, model_config.hf_config.peft_config, device_map="auto"
+        )
+        model.load_weights(hf_lora_model)
+        model = model.cuda()
+        del hf_lora_model, hf_model
+        torch.cuda.empty_cache()
+        return model
+
+    model_class = _get_model_architecture(model_config.hf_config)
 
     # Create a model instance.
     # The weights will be initialized as empty tensors.
     model = model_class(model_config.hf_config)
+
     if model_config.use_dummy_weights:
         model = model.cuda()
         # NOTE(woosuk): For accurate performance evaluation, we assign

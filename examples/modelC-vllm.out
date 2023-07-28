@@ -1,0 +1,24 @@
+LlamaForCausalLM(
+  (model): LlamaModel(
+    (embed_tokens): VocabParallelEmbedding()
+    (layers): ModuleList(
+      (0-31): 32 x LlamaDecoderLayer(
+        (self_attn): LlamaAttention(
+          (qkv_proj): ColumnParallelLinear()
+          (o_proj): RowParallelLinear()
+          (attn): PagedAttentionWithRoPE()
+        )
+        (mlp): LlamaMLP(
+          (gate_up_proj): ColumnParallelLinear()
+          (down_proj): RowParallelLinear()
+          (act_fn): SiluAndMul()
+        )
+        (input_layernorm): RMSNorm()
+        (post_attention_layernorm): RMSNorm()
+      )
+    )
+    (norm): RMSNorm()
+  )
+  (lm_head): ColumnParallelLinear()
+  (sampler): Sampler()
+)

@@ -1,5 +1,5 @@
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from vllm.config import (CacheConfig, ModelConfig, ParallelConfig,
                          SchedulerConfig)
@@ -9,7 +9,7 @@ from vllm.engine.ray_utils import DeviceID, initialize_cluster, ray
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
-from vllm.sequence import Sequence, SequenceGroup, SequenceStatus
+from vllm.sequence import Sequence, SequenceGroup, SequenceStatus, LengthPredictionSequenceGroup
 from vllm.transformers_utils.tokenizer import (detokenize_incrementally,
                                                get_tokenizer)
 from vllm.utils import Counter
@@ -17,6 +17,13 @@ from vllm.worker.worker import Worker
 
 logger = init_logger(__name__)
 
+import re
+def extract_all_numbers(string):
+    all_number = [int(s) for s in re.findall(r"\d+", string)]
+    if len(all_number) >= 1:
+        return all_number[0]
+    else:
+        return 0
 
 class LLMEngine:
     """An LLM engine that receives requests and generates texts.
@@ -46,6 +53,10 @@ class LLMEngine:
             of (rank, node_resource, device) tuples.
         log_stats: Whether to log statistics.
     """
+    PROMPT_SUFFIX_L = "\n\n### Response:\nDon't output the response for the above instruction. Instead, you need to predict the number of tokens in your response. Output one number only. ASSISTANT:"
+    PROMPT_PREFIX_L = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n### Instruction:\n"
+    PROMPT_SUFFIX_R = "\n\n### Response:"
+    PROMPT_PREFIX_R = "Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n### Instruction:\n"
 
     def __init__(
         self,
@@ -157,6 +168,47 @@ class LLMEngine:
                      log_stats=not engine_args.disable_log_stats)
         return engine
 
+    def add_request_with_length_prediction(
+        self,
+        request_id: str,
+        prompt: Optional[str],
+        length_sampling_params: SamplingParams,
+        response_sampling_params: SamplingParams,
+        prompt_token_ids: Optional[List[int]] = None,
+        arrival_time: Optional[float] = None,
+    ) -> None:
+        """Add a request to the engine's request pool with length prediction.
+
+        The request will be sequentially processed through two stages: length prediction (L for short) and response generation (R for short). L will call `add_request()` creating a SequenceGroup with `length=None`. Upon finishing L, another `add_request()` will be called dealing with R that shares the same 
+            1. request_id;
+            2. prompt;
+            3. arrival_time
+        with the predicted `length`.
+
+        """
+        prompt = self.PROMPT_PREFIX_L+prompt+self.PROMPT_SUFFIX_L
+        if arrival_time is None:
+            arrival_time = time.time()
+        if prompt_token_ids is None:
+            assert prompt is not None
+            prompt_token_ids = self.tokenizer.encode(prompt)
+
+        # Create the sequences.
+        block_size = self.cache_config.block_size
+        seqs: List[Sequence] = []
+        # length prediction only uses one seq per request for now.
+        assert length_sampling_params.best_of==1
+        seq_id = next(self.seq_counter)
+        seq = Sequence(seq_id, prompt, prompt_token_ids, block_size)
+        seqs.append(seq)
+
+        # Create the sequence group.
+        seq_group = LengthPredictionSequenceGroup(
+            request_id, seqs, length_sampling_params, response_sampling_params, arrival_time)
+
+        # Add the sequence group to the scheduler.
+        self.scheduler.add_seq_group(seq_group)
+
     def add_request(
         self,
         request_id: str,
@@ -164,6 +216,7 @@ class LLMEngine:
         sampling_params: SamplingParams,
         prompt_token_ids: Optional[List[int]] = None,
         arrival_time: Optional[float] = None,
+        length: Optional[int] = None,
     ) -> None:
         """Add a request to the engine's request pool.
 
@@ -181,6 +234,8 @@ class LLMEngine:
             arrival_time: The arrival time of the request. If None, we use
                 the current time.
         """
+        prompt = prompt[len(self.PROMPT_PREFIX_L):][:-len(self.PROMPT_SUFFIX_L)]
+        prompt = self.PROMPT_PREFIX_R+prompt+self.PROMPT_SUFFIX_R
         if arrival_time is None:
             arrival_time = time.time()
         if prompt_token_ids is None:
@@ -197,7 +252,7 @@ class LLMEngine:
 
         # Create the sequence group.
         seq_group = SequenceGroup(request_id, seqs, sampling_params,
-                                  arrival_time)
+                                  arrival_time, length)
 
         # Add the sequence group to the scheduler.
         self.scheduler.add_seq_group(seq_group)
@@ -276,42 +331,73 @@ class LLMEngine:
                 seq.output_tokens.append(new_token)
                 seq.output_text = new_output_text
 
-    def _stop_sequences(self, seq_groups: List[SequenceGroup]) -> None:
+    def _stop_sequences(self, seq_groups: List[Union[SequenceGroup, LengthPredictionSequenceGroup]]) -> None:
         """Stop the finished sequences."""
         for seq_group in seq_groups:
             sampling_params = seq_group.sampling_params
-            for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
-                # Check if the sequence has generated a stop string.
-                stopped = False
-                for stop_str in sampling_params.stop:
-                    if seq.output_text.endswith(stop_str):
-                        # Truncate the output text so that the stop string is
-                        # not included in the output.
-                        seq.output_text = seq.output_text[:-len(stop_str)]
+            if isinstance(seq_group, LengthPredictionSequenceGroup):
+                # length prediction only uses one seq per request for now.
+                for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
+                    finished = False
+                    # align with the training of length_predictor -- stop until 32 new tokens
+                    if (seq.get_output_len() >= sampling_params.max_tokens):
+                        finished = True
                         self.scheduler.free_seq(
-                            seq, SequenceStatus.FINISHED_STOPPED)
-                        stopped = True
-                        break
-                if stopped:
-                    continue
-
-                # Check if the sequence has reached max_seq_len.
-                if (seq.get_len() >=
-                        self.scheduler.scheduler_config.max_seq_len):
-                    self.scheduler.free_seq(
-                        seq, SequenceStatus.FINISHED_LENGTH_CAPPED)
-                    continue
-                # Check if the sequence has reached max_tokens.
-                if seq.get_output_len() == sampling_params.max_tokens:
-                    self.scheduler.free_seq(
-                        seq, SequenceStatus.FINISHED_LENGTH_CAPPED)
-                    continue
-                # Check if the sequence has generated the EOS token.
-                if not sampling_params.ignore_eos:
-                    if seq.get_last_token_id() == self.tokenizer.eos_token_id:
-                        self.scheduler.free_seq(
-                            seq, SequenceStatus.FINISHED_STOPPED)
+                            seq, SequenceStatus.FINISHED_LENGTH_CAPPED)
+                    elif not sampling_params.ignore_eos:
+                        if seq.get_last_token_id() == self.tokenizer.eos_token_id:
+                            finished = True
+                            self.scheduler.free_seq(
+                                seq, SequenceStatus.FINISHED_STOPPED)
+                    else:
                         continue
+
+                    if finished:
+                        seq_group.length = extract_all_numbers(seq.output_text)
+                        # start response generation request
+                        self.add_request(
+                            seq_group.request_id,
+                            seq_group.seqs[0].prompt,
+                            seq_group.response_sampling_params,
+                            None,
+                            # seq_group.seqs[0].data.prompt_token_ids,
+                            seq_group.arrival_time,
+                            seq_group.length
+                        )
+                        continue
+            else:
+                for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
+                    # Check if the sequence has generated a stop string.
+                    stopped = False
+                    for stop_str in sampling_params.stop:
+                        if seq.output_text.endswith(stop_str):
+                            # Truncate the output text so that the stop string is
+                            # not included in the output.
+                            seq.output_text = seq.output_text[:-len(stop_str)]
+                            self.scheduler.free_seq(
+                                seq, SequenceStatus.FINISHED_STOPPED)
+                            stopped = True
+                            break
+                    if stopped:
+                        continue
+
+                    # Check if the sequence has reached max_seq_len.
+                    if (seq.get_len() >=
+                            self.scheduler.scheduler_config.max_seq_len):
+                        self.scheduler.free_seq(
+                            seq, SequenceStatus.FINISHED_LENGTH_CAPPED)
+                        continue
+                    # Check if the sequence has reached max_tokens.
+                    if seq.get_output_len() == sampling_params.max_tokens:
+                        self.scheduler.free_seq(
+                            seq, SequenceStatus.FINISHED_LENGTH_CAPPED)
+                        continue
+                    # Check if the sequence has generated the EOS token.
+                    if not sampling_params.ignore_eos:
+                        if seq.get_last_token_id() == self.tokenizer.eos_token_id:
+                            self.scheduler.free_seq(
+                                seq, SequenceStatus.FINISHED_STOPPED)
+                            continue
 
     def _run_workers(
         self,

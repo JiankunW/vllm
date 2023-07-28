@@ -155,13 +155,65 @@ def run_hf(
     end = time.time()
     return end - start
 
+def run_vllm_lp(
+    requests: List[Tuple[str, int, int]],
+    model: str,
+    tokenizer: str,
+    tensor_parallel_size: int,
+    seed: int,
+    n: int,
+    use_beam_search: bool,
+    tokenizer_mode: str,
+) -> float:
+    llm = LLM(
+        model=model,
+        tokenizer=tokenizer,
+        tokenizer_mode=tokenizer_mode, 
+        tensor_parallel_size=tensor_parallel_size,
+        seed=seed,
+        gpu_memory_utilization=.4
+    )
+
+    # Add the requests to the engine.
+    for prompt, _, output_len in requests:
+        sampling_params = SamplingParams(
+            n=n,
+            temperature=0.0 if use_beam_search else 1.0,
+            top_p=1.0,
+            use_beam_search=use_beam_search,
+            ignore_eos=True,
+            max_tokens=output_len,
+        )
+        length_sampling_params = SamplingParams(temperature=0, max_tokens=32)  # greedy search
+        response_sampling_params = sampling_params  # user-defined search approach
+        # FIXME(woosuk): Do not use internal method.
+        llm._add_request(
+            prompt, length_sampling_params, response_sampling_params, prompt_token_ids=None,
+        )
+
+    start = time.time()
+    # FIXME(woosuk): Do use internal method.
+    outputs = llm._run_engine(use_tqdm=True)
+    end = time.time()
+    # Print the outputs.
+    print("*"*20)
+    print("*"*20)
+    for output in outputs:
+        prompt = output.prompt
+        generated_text = output.outputs[0].text
+        print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+    print("*"*20)
+    print("*"*20)
+    return end - start
+
+
 
 def main(args: argparse.Namespace):
     print(args)
     random.seed(args.seed)
 
     # Sample the requests.
-    tokenizer = get_tokenizer(args.tokenizer)
+    tokenizer = get_tokenizer(args.tokenizer, tokenizer_mode=args.tokenizer_mode)
     requests = sample_requests(args.dataset, args.num_prompts, tokenizer)
 
     if args.backend == "vllm":
@@ -172,6 +224,10 @@ def main(args: argparse.Namespace):
         assert args.tensor_parallel_size == 1
         elapsed_time = run_hf(requests, args.model, tokenizer, args.n,
                               args.use_beam_search, args.hf_max_batch_size)
+    elif args.backend == "vllm-lp":
+        elapsed_time = run_vllm_lp(
+            requests, args.model, args.tokenizer, args.tensor_parallel_size,
+            args.seed, args.n, args.use_beam_search, args.tokenizer_mode)
     else:
         raise ValueError(f"Unknown backend: {args.backend}")
     total_num_tokens = sum(
@@ -184,12 +240,13 @@ def main(args: argparse.Namespace):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark the throughput.")
-    parser.add_argument("--backend", type=str, choices=["vllm", "hf"],
+    parser.add_argument("--backend", type=str, choices=["vllm", "hf", "vllm-lp"],
                         default="vllm")
     parser.add_argument("--dataset", type=str, required=True,
                         help="Path to the dataset.")
     parser.add_argument("--model", type=str, default="facebook/opt-125m")
     parser.add_argument("--tokenizer", type=str, default=None)
+    parser.add_argument("--tokenizer-mode", type=str, default="auto")
     parser.add_argument("--tensor-parallel-size", "-tp", type=int, default=1)
     parser.add_argument("--n", type=int, default=1,
                         help="Number of generated sequences per prompt.")
@@ -201,7 +258,7 @@ if __name__ == "__main__":
                         help="Maximum batch size for HF backend.")
     args = parser.parse_args()
 
-    if args.backend == "vllm":
+    if "vllm" in args.backend:
         if args.hf_max_batch_size is not None:
             raise ValueError("HF max batch size is only for HF backend.")
     elif args.backend == "hf":
