@@ -60,6 +60,10 @@ class LLM:
             **kwargs,
         )
         self.llm_engine = LLMEngine.from_engine_args(engine_args)
+        if hasattr(self.llm_engine.model_config.hf_config, "peft_config"):
+            self.enable_length_prediction = True
+        else:
+            self.enable_length_prediction = False
         self.request_counter = Counter()
 
     def get_tokenizer(
@@ -123,20 +127,23 @@ class LLM:
             else:
                 token_ids = prompt_token_ids[i]
 
-            length_sampling_params = SamplingParams(temperature=0, max_tokens=32)  # greedy search
-            response_sampling_params = sampling_params  # user-defined search approach
-            self._add_request(prompt, length_sampling_params, response_sampling_params, token_ids)
+            self._add_request(prompt, sampling_params, token_ids)
         return self._run_engine(use_tqdm)
 
     def _add_request(
         self,
         prompt: Optional[str],
-        length_sampling_params: SamplingParams,
         response_sampling_params: SamplingParams,
         prompt_token_ids: Optional[List[int]],
     ) -> None:
         request_id = str(next(self.request_counter))
-        self.llm_engine.add_request_with_length_prediction(request_id, prompt, length_sampling_params, response_sampling_params, prompt_token_ids)
+        if self.enable_length_prediction:
+            length_sampling_params = SamplingParams(temperature=0, max_tokens=32)  # greedy search
+            self.llm_engine.add_request_with_length_prediction(request_id, prompt, length_sampling_params,
+                                                               response_sampling_params, prompt_token_ids)
+        else:
+            self.llm_engine.add_request(request_id, prompt, response_sampling_params,
+                                    prompt_token_ids)
 
     def _run_engine(self, use_tqdm: bool) -> List[RequestOutput]:
         # Initialize tqdm.

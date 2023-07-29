@@ -186,6 +186,7 @@ class LLMEngine:
         with the predicted `length`.
 
         """
+        # Prepare length prediction prompt
         prompt = self.PROMPT_PREFIX_L+prompt+self.PROMPT_SUFFIX_L
         if arrival_time is None:
             arrival_time = time.time()
@@ -217,6 +218,7 @@ class LLMEngine:
         prompt_token_ids: Optional[List[int]] = None,
         arrival_time: Optional[float] = None,
         length: Optional[int] = None,
+        enable_length_prediction: Optional[bool] = False,
     ) -> None:
         """Add a request to the engine's request pool.
 
@@ -234,8 +236,14 @@ class LLMEngine:
             arrival_time: The arrival time of the request. If None, we use
                 the current time.
         """
-        prompt = prompt[len(self.PROMPT_PREFIX_L):][:-len(self.PROMPT_SUFFIX_L)]
-        prompt = self.PROMPT_PREFIX_R+prompt+self.PROMPT_SUFFIX_R
+        if enable_length_prediction:
+            assert length is not None, "Error: Length prediction is enabled, but the received request does not have predicted length."
+            # Prepare response prompt from the length prediction prompt
+            prompt = prompt[len(self.PROMPT_PREFIX_L):][:-len(self.PROMPT_SUFFIX_L)]
+            prompt = self.PROMPT_PREFIX_R+prompt+self.PROMPT_SUFFIX_R
+        else:
+            assert length is None, "Error: Length prediction is not enabled, but the received request has a predicted length."
+
         if arrival_time is None:
             arrival_time = time.time()
         if prompt_token_ids is None:
@@ -362,7 +370,8 @@ class LLMEngine:
                             None,
                             # seq_group.seqs[0].data.prompt_token_ids,
                             seq_group.arrival_time,
-                            seq_group.length
+                            seq_group.length,
+                            enable_length_prediction=True
                         )
                         continue
             else:
