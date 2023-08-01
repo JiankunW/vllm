@@ -88,6 +88,11 @@ class LLMEngine:
         self.log_stats = log_stats
         self._verify_args()
 
+        if hasattr(self.model_config.hf_config, "peft_config"):
+            self.enable_length_prediction = True
+        else:
+            self.enable_length_prediction = False
+
         self.tokenizer = get_tokenizer(
             model_config.tokenizer, tokenizer_mode=model_config.tokenizer_mode)
         self.seq_counter = Counter()
@@ -218,7 +223,6 @@ class LLMEngine:
         prompt_token_ids: Optional[List[int]] = None,
         arrival_time: Optional[float] = None,
         length: Optional[int] = None,
-        enable_length_prediction: Optional[bool] = False,
     ) -> None:
         """Add a request to the engine's request pool.
 
@@ -236,7 +240,7 @@ class LLMEngine:
             arrival_time: The arrival time of the request. If None, we use
                 the current time.
         """
-        if enable_length_prediction:
+        if self.enable_length_prediction:
             assert length is not None, "Error: Length prediction is enabled, but the received request does not have predicted length."
             # Prepare response prompt from the length prediction prompt
             prompt = prompt[len(self.PROMPT_PREFIX_L):][:-len(self.PROMPT_SUFFIX_L)]
@@ -361,17 +365,15 @@ class LLMEngine:
                         continue
 
                     if finished:
-                        seq_group.length = extract_all_numbers(seq.output_text)
+                        length = extract_all_numbers(seq.output_text)
                         # start response generation request
                         self.add_request(
                             seq_group.request_id,
                             seq_group.seqs[0].prompt,
                             seq_group.response_sampling_params,
                             None,
-                            # seq_group.seqs[0].data.prompt_token_ids,
                             seq_group.arrival_time,
-                            seq_group.length,
-                            enable_length_prediction=True
+                            length,
                         )
                         continue
             else:

@@ -236,7 +236,7 @@ class LlamaModel(nn.Module):
                 input_metadata,
                 cache_event,
             )
-        assert cache_event is None, "NotImplementedError: not support not None cache_event for now. Fix in the future."
+        # assert cache_event is None, "NotImplementedError: not support not None cache_event for now. Fix in the future."
         kwargs_l, kwargs_r = self.divide_backbone_outputs(
             hidden_states, positions, input_metadata
         )

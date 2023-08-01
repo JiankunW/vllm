@@ -227,6 +227,9 @@ class SequenceGroup:
 
     def is_finished(self) -> bool:
         return all(seq.is_finished() for seq in self.seqs)
+    
+    def is_length_prediction_group(self) -> bool:
+        return self.length is None
 
     def __repr__(self) -> str:
         return (f"SequenceGroup(request_id={self.request_id}, "

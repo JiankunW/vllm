@@ -63,12 +63,14 @@ class RequestOutput:
         prompt_token_ids: List[int],
         outputs: List[CompletionOutput],
         finished: bool,
+        is_length_prediction: Optional[bool] = False,
     ) -> None:
         self.request_id = request_id
         self.prompt = prompt
         self.prompt_token_ids = prompt_token_ids
         self.outputs = outputs
         self.finished = finished
+        self.is_length_prediction = is_length_prediction
 
     @classmethod
     def from_seq_group(cls, seq_group: SequenceGroup) -> "RequestOutput":
@@ -101,8 +103,9 @@ class RequestOutput:
         prompt = top_n_seqs[0].prompt
         prompt_token_ids = top_n_seqs[0].data.prompt_token_ids
         finished = seq_group.is_finished()
+        is_length_prediction = seq_group.is_length_prediction_group()
         return cls(seq_group.request_id, prompt, prompt_token_ids, outputs,
-                   finished)
+                   finished, is_length_prediction)
 
     def __repr__(self) -> str:
         return (f"RequestOutput(request_id={self.request_id}, "

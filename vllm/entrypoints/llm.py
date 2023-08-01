@@ -60,10 +60,7 @@ class LLM:
             **kwargs,
         )
         self.llm_engine = LLMEngine.from_engine_args(engine_args)
-        if hasattr(self.llm_engine.model_config.hf_config, "peft_config"):
-            self.enable_length_prediction = True
-        else:
-            self.enable_length_prediction = False
+        self.enable_length_prediction = self.llm_engine.enable_length_prediction
         self.request_counter = Counter()
 
     def get_tokenizer(

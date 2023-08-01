@@ -53,6 +53,10 @@ class AsyncLLMEngine:
         else:
             engine_class = ray.remote(num_gpus=1)(LLMEngine).remote
         self.engine = engine_class(*args, **kwargs)
+        if hasattr(self.engine.model_config.hf_config, "peft_config"):
+            self.enable_length_prediction = True
+        else:
+            self.enable_length_prediction = False
         # Request id -> request output.
         self.request_outputs: Dict[str, RequestOutput] = {}
         # Request id -> event to notify that there is new output.
@@ -119,20 +123,39 @@ class AsyncLLMEngine:
                         f"sampling params: {sampling_params}, "
                         f"prompt token ids: {prompt_token_ids}.")
 
-        # Add the request into the vLLM engine's waiting queue.
-        if self.engine_use_ray:
-            await self.engine.add_request.remote(
-                request_id,
-                prompt,
-                sampling_params,
-                prompt_token_ids=prompt_token_ids,
-                arrival_time=arrival_time)
+        if not self.enable_length_prediction:
+            # Add the request into the vLLM engine's waiting queue.
+            if self.engine_use_ray:
+                await self.engine.add_request.remote(
+                    request_id,
+                    prompt,
+                    sampling_params,
+                    prompt_token_ids=prompt_token_ids,
+                    arrival_time=arrival_time)
+            else:
+                self.engine.add_request(request_id,
+                                        prompt,
+                                        sampling_params,
+                                        prompt_token_ids=prompt_token_ids,
+                                        arrival_time=arrival_time)
         else:
-            self.engine.add_request(request_id,
-                                    prompt,
-                                    sampling_params,
-                                    prompt_token_ids=prompt_token_ids,
-                                    arrival_time=arrival_time)
+            length_sampling_params = SamplingParams(temperature=0, max_tokens=32)
+            if self.engine_use_ray:
+                await self.engine.add_request_with_length_prediction.remote(
+                    request_id,
+                    prompt,
+                    length_sampling_params,
+                    sampling_params,
+                    prompt_token_ids=prompt_token_ids,
+                    arrival_time=arrival_time)
+            else:
+                self.engine.add_request_with_length_prediction(
+                    request_id,
+                    prompt,
+                    length_sampling_params,
+                    sampling_params,
+                    prompt_token_ids=prompt_token_ids,
+                    arrival_time=arrival_time)
 
         # The vLLM engine does not have a background loop that keeps
         # processing incoming requests. Therefore, we need to keep kicking
@@ -163,21 +186,22 @@ class AsyncLLMEngine:
 
             # Decode and return new outputs.
             request_output = self.request_outputs[request_id]
-            yield request_output
+            if not request_output.is_length_prediction:
+                yield request_output
 
-            # Once finished, release the resources of the sequence group.
-            if request_output.finished:
-                if self.log_requests:
-                    logger.info(f"Finished request {request_id}.")
+                # Once finished, release the resources of the sequence group.
+                if request_output.finished:
+                    if self.log_requests:
+                        logger.info(f"Finished request {request_id}.")
 
-                del self.request_outputs[request_id]
-                del self.request_events[request_id]
-                # Kick the engine if the engine is not running. This is to
-                # prevent that there are still requests in engine's waiting
-                # queue to be executed.
-                if not self.is_engine_running:
-                    await self.engine_step()
-                break
+                    del self.request_outputs[request_id]
+                    del self.request_events[request_id]
+                    # Kick the engine if the engine is not running. This is to
+                    # prevent that there are still requests in engine's waiting
+                    # queue to be executed.
+                    if not self.is_engine_running:
+                        await self.engine_step()
+                    break
 
     async def abort(self, request_id: str) -> None:
         """Abort a request.
