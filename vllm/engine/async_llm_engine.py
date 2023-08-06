@@ -186,7 +186,7 @@ class AsyncLLMEngine:
 
             # Decode and return new outputs.
             request_output = self.request_outputs[request_id]
-            if not request_output.is_length_prediction:
+            if not self.enable_length_prediction or not request_output.is_length_prediction:
                 yield request_output
 
                 # Once finished, release the resources of the sequence group.
