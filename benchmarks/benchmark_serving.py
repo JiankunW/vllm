@@ -131,6 +131,18 @@ async def send_request(
             "inputs": prompt,
             "parameters": params,
         }
+    elif backend == "vllm-lp":
+        pload = {
+            "prompt": prompt,
+            "n": 1,
+            "best_of": best_of,
+            "use_beam_search": use_beam_search,
+            "temperature": 0.0 if use_beam_search else 1.0,
+            "top_p": 1.0,
+            "max_tokens": output_len,
+            "ignore_eos": True,
+            "stream": False,
+        }
     else:
         raise ValueError(f"Unknown backend: {backend}")
 
@@ -177,7 +189,8 @@ def main(args: argparse.Namespace):
     np.random.seed(args.seed)
 
     api_url = f"http://{args.host}:{args.port}/generate"
-    tokenizer = get_tokenizer(args.tokenizer)
+    tokenizer_mode = "slow" if args.backend == "vllm-lp" else "auto"
+    tokenizer = get_tokenizer(args.tokenizer, tokenizer_mode=tokenizer_mode)
     input_requests = sample_requests(args.dataset, args.num_prompts, tokenizer)
 
     benchmark_start_time = time.time()
@@ -208,7 +221,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Benchmark the online serving throughput.")
     parser.add_argument("--backend", type=str, default="vllm",
-                        choices=["vllm", "tgi"])
+                        choices=["vllm", "tgi", "vllm-lp"])
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--dataset", type=str, required=True,
