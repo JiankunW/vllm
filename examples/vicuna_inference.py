@@ -25,16 +25,16 @@ sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 # sampling_params = SamplingParams(temperature=0.8, top_k=4, presence_penalty=0.6, max_tokens=16)
 
 # Create an LLM.
-llm = LLM(model="/home/jiankun/randomfun/Sequence-Scheduling/ckpts/vicuna-7b",
-          tokenizer_mode="slow", tensor_parallel_size=1)
+# llm = LLM(model="/home/jiankun/randomfun/Sequence-Scheduling/ckpts/vicuna-7b",
+#           tokenizer_mode="slow", tensor_parallel_size=1)
 
 # 2 gpu
 # llm = LLM(model="/home/jiankun/randomfun/Sequence-Scheduling/ckpts/vicuna-7b-adapter",
 #           tokenizer_mode="slow", tensor_parallel_size=2, gpu_memory_utilization=.4)
 
-# # single gpu
-# llm = LLM(model="/home/jiankun/randomfun/Sequence-Scheduling/ckpts/vicuna-7b-adapter",
-#           tokenizer_mode="slow", tensor_parallel_size=1, gpu_memory_utilization=.8)
+# single gpu
+llm = LLM(model="/home/jiankun/randomfun/Sequence-Scheduling/ckpts/vicuna-7b-adapter",
+          tokenizer_mode="slow", tensor_parallel_size=1, gpu_memory_utilization=.8)
 
 # Generate texts from the prompts. The output is a list of RequestOutput objects
 # that contain the prompt, generated text, and other information.
